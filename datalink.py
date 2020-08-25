@@ -158,7 +158,6 @@ def getCompanyInfoli(id, force=None):
     target = 'https://www.linkedin.com/search/results/people/?facetCurrentCompany=%s' % id
 
     resp = linkedin.get(target, proxies=proxies, verify=False)
-    writeResults(resp.text, 'resp1.txt')
 
     page = html.document_fromstring(resp.content)
     employeeblob = loads(page.xpath('//text()[contains(., "memberDistance")]')[0].strip())
@@ -187,7 +186,6 @@ def getCompanyInfoli(id, force=None):
         subtarget = '{}&page={}'.format(target, pageCount) 
 
         resp = linkedin.get(subtarget, proxies=proxies, verify=False)
-        writeResults(resp.text, 'resp2.txt')
 
         page = html.document_fromstring(resp.content)
 

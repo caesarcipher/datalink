@@ -12,7 +12,7 @@ from sys import argv
 from math import ceil
 from lxml import html
 from json import loads
-from os import getcwd
+from os import getcwd, system
 from urllib.parse import quote
 from argparse import ArgumentParser
 from requests import get, post, Session
@@ -21,16 +21,12 @@ from urllib3 import disable_warnings
 disable_warnings()
 
 linkedin = None
-proxies = {
-  'http': 'http://localhost:8080',
-  'https': 'http://localhost:8080',
-}
 
 def intake(msg):
     try:
         response = input(msg)
     except KeyboardInterrupt:
-        bombout()
+        bombout(punc='')
     return response
 
 def out(msg = '', punc='!', pre='', post=''):
@@ -51,6 +47,33 @@ def bombout(msg = '', punc='!', pre='', post=''):
         out = '\t{0} {1} {0}'.format(punc, msg)
     exit('{}{}{}\n'.format(pre, out, post))
 
+def _get(token, target, proxy):
+    if not proxies:
+        return token.get(target)
+    else:
+        return token.get(target, proxies=proxy, verify=False)
+
+def _post(token, target, proxy):
+    if not proxies:
+        return token.post(target)
+    else:
+        return token.post(target, proxies=proxy, verify=False)
+
+def mangleNames(inFile, outFile='output_mangled.txt'):
+    try:
+        f = open(inFile)
+    except IOError as e:
+        bombout('error opening file - %s' % e)
+
+    data = f.read()
+
+    filters = {r',.*'}
+
+    # TODO rectify/mutate data!
+
+    writeResults(data, outFile)
+    bombout('input file (%s) successfully mangled (%s)' % (inFile, outFile))
+
 def configure(args, confFile):
     from configparser import ConfigParser
 
@@ -63,8 +86,12 @@ def configure(args, confFile):
     config = ConfigParser()
     config.read(conf)
 
-    args.username = config['linkedin.com']['username']
-    args.password = config['linkedin.com']['password']
+    args.username = config.get('linkedin.com', 'username')
+    args.password = config.get('linkedin.com', 'password')
+
+    if config.has_option('linkedin.com', 'proxy'):
+        args.proxy = { 'http': config.get('linkedin.com', 'proxy'), 'https': config.get('linkedin.com', 'proxy') }
+
 
 def writeResults(output, fileName = 'output.txt'):
     try:
@@ -75,7 +102,7 @@ def writeResults(output, fileName = 'output.txt'):
     f.write(output)
     f.close()
 
-def initialiseTokenli(username, password):
+def initialiseTokenli(username, password, proxy):
     global linkedin
     linkedin = Session()
     linkedin.headers.update({'User-Agent': None})
@@ -83,7 +110,7 @@ def initialiseTokenli(username, password):
     quser = quote(username)
     qpass = quote(password)
 
-    loginPageRequest = linkedin.get('https://www.linkedin.com/login', proxies=proxies, verify=False)
+    loginPageRequest = _get(linkedin, 'https://www.linkedin.com/login', proxy)
 
     csrf = match(r'"(ajax:[\d]+)', loginPageRequest.cookies['JSESSIONID']).group(1)
     linkedin.headers.update({'Csrf-Token': csrf})
@@ -91,19 +118,20 @@ def initialiseTokenli(username, password):
     loginCsrf = match('"v=2&([^"]+)', loginPageRequest.cookies['bcookie']).group(1)
     data = 'session_key={}&session_password={}&loginCsrfParam={}'.format(quser, qpass, loginCsrf)
 
-    resp = linkedin.post('https://www.linkedin.com/login-submit', allow_redirects=False, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'}, proxies=proxies, verify=False)
+    # TODO - convert to _post() call
+    resp = linkedin.post('https://www.linkedin.com/login-submit', allow_redirects=False, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})#, proxies=proxies, verify=False)
 
     redir = resp.headers.get('Location')
 
-    if 'feed' not in redir:
+    if'feed' not in redir:
         bombout('checkpoint violation? Location: "%s"' % redir, punc='?!')
 
-def searchCompaniesli(domain, company):
+def searchCompaniesli(domain, company, proxy):
     choice = list()
 
     target = 'https://www.linkedin.com/voyager/api/typeahead/hitsV2?keywords=%s&original=GLOBAL_SEARCH_HEADER&q=blended' % (domain)
 
-    typeaheadSearchResults = linkedin.get(target, proxies=proxies, verify=False)
+    typeaheadSearchResults = _get(linkedin, target, proxy)
     
     resultBlobJSON = loads(typeaheadSearchResults.text)
 
@@ -153,13 +181,14 @@ def searchCompaniesli(domain, company):
 
     return choice
 
-def getCompanyInfoli(id, force=None):
+def getCompanyInfoli(id, force=None, proxy=None):
     output = list()
     target = 'https://www.linkedin.com/search/results/people/?facetCurrentCompany=%s' % id
 
-    resp = linkedin.get(target, proxies=proxies, verify=False)
+    resp = _get(linkedin, target, proxy)
 
     page = html.document_fromstring(resp.content)
+
     employeeblob = loads(page.xpath('//text()[contains(., "memberDistance")]')[0].strip())
 
     numEmployees = int(employeeblob['data']['metadata']['totalResultCount'])
@@ -185,11 +214,9 @@ def getCompanyInfoli(id, force=None):
     for pageCount in range(2, numPages+1):
         subtarget = '{}&page={}'.format(target, pageCount) 
 
-        resp = linkedin.get(subtarget, proxies=proxies, verify=False)
+        resp = _get(linkedin, subtarget, proxy)
 
         page = html.document_fromstring(resp.content)
-
-        # TODO this next line needs to be more robust to account for if linkedin shuffles things around
         employeeblob = loads(page.xpath('//text()[contains(., "memberDistance")]')[0].strip())  # [-1] instead of [0]?
 
         for employee in employeeblob['data']['elements'][0]['elements']:
@@ -215,16 +242,22 @@ def main():
     parser.add_argument('-p', '--password')
     parser.add_argument('-o', '--output')
     parser.add_argument('-f', '--force', action='store_true')
+    parser.add_argument('-m', '--mangle')
     parser.add_argument('--id')
     parser.add_argument('--conf')
-
+    parser.add_argument('--proxy')
+ 
     args = parser.parse_args()
+
+    if args.mangle:
+        mangleNames(args.mangle, args.output)
 
     if args.conf:
        configure(args, args.conf)
 
     if not (args.username and args.password):
-        bombout('credentials not specified, but are required')
+        parser.print_help()
+        bombout('credentials not specified, but are required', pre='\n')
 
     if not args.id:
         while not args.domain:
@@ -239,17 +272,19 @@ def main():
     if args.id:
         out('target id:\t%s' % (args.id), '', pre='\n')
     out('username:\t%s' % (args.username), '')
-    out('password:\t%s' % (args.password), '', post='\n')
+    # out('password:\t%s' % (args.password), '', post='\n')
+    out('proxy:\t\t%s' % (args.proxy), '', post='\n')
 
     if intake('\tlook good enough to continue? [Y/n] ').lower() not in {'', 'y', 'ye', 'yes', 'yeet', 'yarp', 'yolo'}:
         bombout('exiting')
 
-    initialiseTokenli(args.username, args.password)
+    initialiseTokenli(args.username, args.password, args.proxy)
 
     if not args.id:
-        args.id = searchCompaniesli(args.domain, args.company)
+        args.id = searchCompaniesli(args.domain, args.company, args.proxy)
 
-    getCompanyInfoli(args.id, args.force)
+    getCompanyInfoli(args.id, args.force, args.proxy)
 
 if __name__ == '__main__':
+    system('clear')
     main()

@@ -2,7 +2,7 @@
 
 # datalink - an open source intelligence gathering tool
 # from caesarcipher
-# version 20200824
+# version 200905
 
 from re import match
 
@@ -48,13 +48,13 @@ def bombout(msg = '', punc='!', pre='', post=''):
     exit('{}{}{}\n'.format(pre, out, post))
 
 def _get(token, target, proxy):
-    if not proxies:
+    if not proxy:
         return token.get(target)
     else:
         return token.get(target, proxies=proxy, verify=False)
 
 def _post(token, target, proxy):
-    if not proxies:
+    if not proxy:
         return token.post(target)
     else:
         return token.post(target, proxies=proxy, verify=False)
@@ -123,7 +123,7 @@ def initialiseTokenli(username, password, proxy):
 
     redir = resp.headers.get('Location')
 
-    if'feed' not in redir:
+    if 'feed' not in redir:
         bombout('checkpoint violation? Location: "%s"' % redir, punc='?!')
 
 def searchCompaniesli(domain, company, proxy):

@@ -2,11 +2,11 @@
 
 # datalink - an open source intelligence gathering tool
 # from caesarcipher
-# version 200905
+# version 200915
 
 from re import match
 
-from os import path
+from os import path, getenv
 from re import match
 from sys import argv
 from math import ceil
@@ -22,9 +22,12 @@ disable_warnings()
 
 linkedin = None
 
-def intake(msg):
+def intake(msg, pre=None):
     try:
-        response = input(msg)
+        if pre:
+            response = input(f'{pre}{msg}')
+        else:
+            response = input(msg)
     except KeyboardInterrupt:
         bombout(punc='')
     return response
@@ -77,11 +80,16 @@ def mangleNames(inFile, outFile='output_mangled.txt'):
 def configure(args, confFile):
     from configparser import ConfigParser
 
-    for fileLoc in {'.', '~'}:
+    conf = None
+
+    for fileLoc in {getenv("HOME"), '.'}:
         confFileLoc = f'{fileLoc}/{confFile}'
         if path.isfile(confFileLoc):
             conf = confFileLoc
             break
+
+    if not conf:
+        bombout(f'configuration file {confFile} not found')
 
     config = ConfigParser()
     config.read(conf)
@@ -96,8 +104,8 @@ def configure(args, confFile):
 def writeResults(output, fileName = 'output.txt'):
     try:
         f = open(fileName, 'w')
-    except IOError:
-        bombout('error writing file')
+    except IOError as e:
+        bombout('error writing file %s' % e)
 
     f.write(output)
     f.close()
@@ -123,13 +131,13 @@ def initialiseTokenli(username, password, proxy):
 
     redir = resp.headers.get('Location')
 
-    if 'feed' not in redir:
+    if redir and 'feed' not in redir:
         bombout('checkpoint violation? Location: "%s"' % redir, punc='?!')
 
 def searchCompaniesli(domain, company, proxy):
     choice = list()
 
-    target = 'https://www.linkedin.com/voyager/api/typeahead/hitsV2?keywords=%s&original=GLOBAL_SEARCH_HEADER&q=blended' % (domain)
+    target = 'https://www.linkedin.com/voyager/api/typeahead/hitsV2?keywords=%s&original=GLOBAL_SEARCH_HEADER&q=blended' % (domain if domain else company)
 
     typeaheadSearchResults = _get(linkedin, target, proxy)
     
@@ -169,6 +177,19 @@ def searchCompaniesli(domain, company, proxy):
 
     out('{}{:^16}{}'.format(0, '[EXIT]', '-none of the above-'), punc='', post='\n')
 
+    # TODO
+    # look good enough to continue? [Y/n] 
+    # 0     [EXIT]     -none of the above- 
+
+    # which target to scrape? > 1
+    # Traceback (most recent call last):
+    # File "/usr/local/bin/datalink", line 306, in <module>
+    #     main()
+    # File "/usr/local/bin/datalink", line 300, in main
+    #     args.id = searchCompaniesli(args.domain, args.company, args.proxy)
+    # File "/usr/local/bin/datalink", line 186, in searchCompaniesli
+    #     choice = choice[int(selection)-1]
+    # IndexError: list index out of range
     selection = ''
     while not selection:
         selection = intake('which target to scrape? > ')
@@ -181,7 +202,7 @@ def searchCompaniesli(domain, company, proxy):
 
     return choice
 
-def getCompanyInfoli(id, force=None, proxy=None):
+def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
     output = list()
     target = 'https://www.linkedin.com/search/results/people/?facetCurrentCompany=%s' % id
 
@@ -193,7 +214,7 @@ def getCompanyInfoli(id, force=None, proxy=None):
 
     numEmployees = int(employeeblob['data']['metadata']['totalResultCount'])
     numPages = ceil(numEmployees/10)
-    out('target apears to have %s employees (across %s pages of results)' % (numEmployees, numPages))
+    out('target apears to have %s employees (across %s pages of results)' % (numEmployees, numPages), post='\n')
 
     if numEmployees > 1000:
         if not force:
@@ -217,11 +238,14 @@ def getCompanyInfoli(id, force=None, proxy=None):
         resp = _get(linkedin, subtarget, proxy)
 
         page = html.document_fromstring(resp.content)
-        employeeblob = loads(page.xpath('//text()[contains(., "memberDistance")]')[0].strip())  # [-1] instead of [0]?
+        employeeblob = loads(page.xpath('//text()[contains(., "memberDistance")]')[-1].strip())
 
         for employee in employeeblob['data']['elements'][0]['elements']:
             name = employee['title']['text']
-            title = employee['headline']['text']
+            try:
+                title = employee['headline']['text']
+            except KeyError as e:
+                out('oops %s' % e)
             location = employee['subline']['text']
             out('{:28}{:32}{}'.format(name, location, title), punc='')
             output.append([name, location, title])
@@ -231,8 +255,20 @@ def getCompanyInfoli(id, force=None, proxy=None):
         raw += f'{entry[0]},{entry[1]},{entry[2]}\n'
         names += f'{entry[0]}\n'
 
-    writeResults(raw, 'raw.csv')
-    writeResults(names)
+    # TODO probably ought to add timestamps
+    if outfile:
+        fileout = outfile
+    elif company:
+        fileout = f'{company}.txt'
+    else:
+        fileout = f'{id}.txt'
+
+    writeResults(names, fileout)
+    writeResults(raw, f'raw_{fileout}')
+
+    # TODO this should count lines not total length
+    # out(f'wrote {len(names)} results to {fileout}', pre='\n')
+    out(f'results written to {fileout}', pre='\n')
 
 def main():
     parser = ArgumentParser()
@@ -242,40 +278,46 @@ def main():
     parser.add_argument('-p', '--password')
     parser.add_argument('-o', '--output')
     parser.add_argument('-f', '--force', action='store_true')
-    parser.add_argument('-m', '--mangle')
+    # parser.add_argument('-m', '--mangle')
     parser.add_argument('--id')
     parser.add_argument('--conf')
+    parser.add_argument('--demo', action='store_true')
     parser.add_argument('--proxy')
  
     args = parser.parse_args()
 
-    if args.mangle:
-        mangleNames(args.mangle, args.output)
+    # if args.mangle:
+    #     mangleNames(args.mangle, args.output)
 
     if args.conf:
        configure(args, args.conf)
 
+    # TODO better dynamic cred intake
     if not (args.username and args.password):
         parser.print_help()
         bombout('credentials not specified, but are required', pre='\n')
 
     if not args.id:
-        while not args.domain:
-            args.domain = intake('target domain? [example.com] > ')
+        if not args.company:
+            while not args.domain:
+                args.domain = intake('target domain? [example.com] > ')
 
         if not args.company:
             args.company = args.domain.split('.')[0]
 
-    if args.domain and args.company:
+    if args.domain:
         out('domain:\t%s' % (args.domain), '', pre='\n')
+    if args.company:
         out('company:\t%s' % (args.company), '')
     if args.id:
         out('target id:\t%s' % (args.id), '', pre='\n')
     out('username:\t%s' % (args.username), '')
-    # out('password:\t%s' % (args.password), '', post='\n')
-    out('proxy:\t\t%s' % (args.proxy), '', post='\n')
+    if not args.demo:
+        out('password:\t%s' % (args.password), '')
+    if args.proxy:
+        out('proxy:\t\t%s' % (args.proxy), '')
 
-    if intake('\tlook good enough to continue? [Y/n] ').lower() not in {'', 'y', 'ye', 'yes', 'yeet', 'yarp', 'yolo'}:
+    if intake('\tlook good enough to continue? [Y/n] ', pre='\n').lower() not in {'', 'y', 'ye', 'yes', 'yeet', 'yarp', 'yolo'}:
         bombout('exiting')
 
     initialiseTokenli(args.username, args.password, args.proxy)
@@ -283,7 +325,7 @@ def main():
     if not args.id:
         args.id = searchCompaniesli(args.domain, args.company, args.proxy)
 
-    getCompanyInfoli(args.id, args.force, args.proxy)
+    getCompanyInfoli(args.id, args.company, args.output, args.force, args.proxy)
 
 if __name__ == '__main__':
     system('clear')

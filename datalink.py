@@ -2,10 +2,9 @@
 
 # datalink - an open source intelligence gathering tool
 # from caesarcipher
-# version 200915
+# version 20210222
 
 from re import match
-
 from os import path, getenv
 from re import match
 from sys import argv
@@ -99,7 +98,6 @@ def configure(args, confFile):
 
     if config.has_option('linkedin.com', 'proxy'):
         args.proxy = { 'http': config.get('linkedin.com', 'proxy'), 'https': config.get('linkedin.com', 'proxy') }
-
 
 def writeResults(output, fileName = 'output.txt'):
     try:
@@ -214,7 +212,7 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
 
     numEmployees = int(employeeblob['data']['metadata']['totalResultCount'])
     numPages = ceil(numEmployees/10)
-    out('target apears to have %s employees (across %s pages of results)' % (numEmployees, numPages), post='\n')
+    out('target appears to have %s employees (across %s pages of results)' % (numEmployees, numPages), post='\n')
 
     if numEmployees > 1000:
         if not force:
@@ -225,12 +223,17 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
 
         out(punc='')
 
-    for employee in employeeblob['data']['elements'][1]['elements']:
-        name = employee['title']['text']
-        title = employee['headline']['text']
-        location = employee['subline']['text']
-        out('{:28}{:32}{}'.format(name, location, title), punc='')
-        output.append([name, location, title])
+    for employee in employeeblob['included']:
+        emp = employee.get('title')
+        
+        if emp:
+            name = emp['text'] 
+            #title = employee['headline']['text']
+            #location = employee['subline']['text']
+            #out('{:28}{:32}{}'.format(name, location, title), punc='')
+            #output.append([name, location, title])
+            out('{:28}'.format(name), punc='')
+            output.append([name])
 
     for pageCount in range(2, numPages+1):
         subtarget = '{}&page={}'.format(target, pageCount) 
@@ -240,19 +243,24 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
         page = html.document_fromstring(resp.content)
         employeeblob = loads(page.xpath('//text()[contains(., "memberDistance")]')[-1].strip())
 
-        for employee in employeeblob['data']['elements'][0]['elements']:
-            name = employee['title']['text']
-            try:
-                title = employee['headline']['text']
-            except KeyError as e:
-                out('oops %s' % e)
-            location = employee['subline']['text']
-            out('{:28}{:32}{}'.format(name, location, title), punc='')
-            output.append([name, location, title])
+        for employee in employeeblob['included']:
+            emp = employee.get('title')
+
+            if emp:
+                name = emp['text']
+                #try:
+                #    title = employee['headline']['text']
+                #except KeyError as e:
+                #    out('oops %s' % e)
+                #location = employee['subline']['text']
+                #out('{:28}{:32}{}'.format(name, location, title), punc='')
+                #output.append([name, location, title])
+                out('{:28}'.format(name), punc='')
+                output.append([name])
 
     names=raw = ''
     for entry in output:
-        raw += f'{entry[0]},{entry[1]},{entry[2]}\n'
+        #raw += f'{entry[0]},{entry[1]},{entry[2]}\n'
         names += f'{entry[0]}\n'
 
     # TODO probably ought to add timestamps
@@ -264,7 +272,7 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
         fileout = f'{id}.txt'
 
     writeResults(names, fileout)
-    writeResults(raw, f'raw_{fileout}')
+    #writeResults(raw, f'raw_{fileout}')
 
     # TODO this should count lines not total length
     # out(f'wrote {len(names)} results to {fileout}', pre='\n')

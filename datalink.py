@@ -2,16 +2,14 @@
 
 # datalink - an open source intelligence gathering tool
 # from caesarcipher
-# version 20210222
+# version 202106xx
 
-from re import match
-from os import path, getenv
-from re import match
+from re import match, search
+from os import path, getenv, getcwd
 from sys import argv
 from math import ceil
 from lxml import html
 from json import loads
-from os import getcwd, system
 from urllib.parse import quote
 from argparse import ArgumentParser
 from requests import get, post, Session
@@ -32,21 +30,21 @@ def intake(msg, pre=None):
     return response
 
 def out(msg = '', punc='!', pre='', post=''):
-    # out = ''
-    # for line in msg:
-    if len(punc) > 1:
-        out = '\t{0} {1} {2}'.format(punc[::-1], msg, punc)
-    else:
-        out = '\t{0} {1} {0}'.format(punc, msg)
+    out = ""
+    for line in msg.splitlines():
+        if len(punc) > 1:
+            out += '\t{0}{1}{2}\n'.format(punc[::-1], line, punc)
+        else:
+            out += '\t{0}{1}{0}\n'.format(punc, line)
     print(f'{pre}{out}{post}')
 
-def bombout(msg = '', punc='!', pre='', post=''):
-    # out = ''
-    # for line in msg:
-    if len(punc) > 1:
-        out = '\t{0} {1} {2}'.format(punc[::-1], msg, punc)
-    else:
-        out = '\t{0} {1} {0}'.format(punc, msg)
+def bombout(msg = '', punc=' !', pre='', post=''):
+    out = ""
+    for line in msg.splitlines():
+        if len(punc) > 1:
+            out += '\t{0}{1}{2}'.format(punc[::-1], line, punc)
+        else:
+            out += '\t{0}{1}{0}'.format(punc, line)
     exit('{}{}{}\n'.format(pre, out, post))
 
 def _get(token, target, proxy):
@@ -61,20 +59,33 @@ def _post(token, target, proxy):
     else:
         return token.post(target, proxies=proxy, verify=False)
 
-def mangleNames(inFile, outFile='output_mangled.txt'):
+def pruneInput(inFile, outFile=None):
     try:
         f = open(inFile)
-    except IOError as e:
-        bombout('error opening file - %s' % e)
+    except IOError as err:
+        bombout(f'error opening file - {err}')
 
-    data = f.read()
+    if not outFile:
+        outFile = 'pruned_%s' % (inFile)
 
-    filters = {r',.*'}
+    filters = [ r',.*', r'\.', r'\b\w\s' ]
 
-    # TODO rectify/mutate data!
+    input = f.read().splitlines()
 
-    writeResults(data, outFile)
-    bombout('input file (%s) successfully mangled (%s)' % (inFile, outFile))
+    prunedOut = ""
+
+    for line in input:
+        for filter in filters:
+            r = search(filter, line)
+            if r:
+                #out(line)
+                line = line[:r.start()]+line[r.end():]
+                #out(line, post='\n')
+        prunedOut += f'{line}\n'
+
+    out(prunedOut, punc='')
+    writeResults(prunedOut, outFile)
+    bombout(f'pruned results written to {outFile}')
 
 def configure(args, confFile):
     from configparser import ConfigParser
@@ -102,8 +113,8 @@ def configure(args, confFile):
 def writeResults(output, fileName = 'output.txt'):
     try:
         f = open(fileName, 'w')
-    except IOError as e:
-        bombout('error writing file %s' % e)
+    except IOError as err:
+        bombout(f'error writing file {err}')
 
     f.write(output)
     f.close()
@@ -286,7 +297,7 @@ def main():
     parser.add_argument('-p', '--password')
     parser.add_argument('-o', '--output')
     parser.add_argument('-f', '--force', action='store_true')
-    # parser.add_argument('-m', '--mangle')
+    parser.add_argument('-P', '--prune')
     parser.add_argument('--id')
     parser.add_argument('--conf')
     parser.add_argument('--demo', action='store_true')
@@ -294,8 +305,8 @@ def main():
  
     args = parser.parse_args()
 
-    # if args.mangle:
-    #     mangleNames(args.mangle, args.output)
+    if args.prune:
+        pruneInput(args.prune, args.output)
 
     if args.conf:
        configure(args, args.conf)
@@ -336,5 +347,4 @@ def main():
     getCompanyInfoli(args.id, args.company, args.output, args.force, args.proxy)
 
 if __name__ == '__main__':
-    system('clear')
     main()

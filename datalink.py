@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 # datalink - an open source intelligence gathering tool
-# from caesarcipher
-# version 202106xx
+# from caesarcipher, inspired by linkScrape
+version = '20210719'
 
 from re import match, search
 from os import path, getenv, getcwd
@@ -10,9 +10,9 @@ from sys import argv
 from math import ceil
 from lxml import html
 from json import loads
-from urllib.parse import quote
 from argparse import ArgumentParser
 from requests import get, post, Session
+from urllib.parse import quote
 
 from urllib3 import disable_warnings
 disable_warnings()
@@ -25,26 +25,38 @@ def intake(msg, pre=None):
             response = input(f'{pre}{msg}')
         else:
             response = input(msg)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         bombout(punc='')
     return response
 
-def out(msg = '', punc='!', pre='', post=''):
+def out(msg='', punc='!', pre='', post=''):
     out = ""
-    for line in msg.splitlines():
+    if isinstance(msg, str):
         if len(punc) > 1:
-            out += '\t{0}{1}{2}\n'.format(punc[::-1], line, punc)
+            out += '    {0}{1}{2}'.format(punc[::-1], msg, punc)
         else:
-            out += '\t{0}{1}{0}\n'.format(punc, line)
+            out += '    {0}{1}{0}'.format(punc, msg)
+    else:
+        for line in msg:
+            if len(punc) > 1:
+                out += '    {0}{1}{2}'.format(punc[::-1], line, punc)
+            else:
+                out += '    {0}{1}{0}'.format(punc, line)
     print(f'{pre}{out}{post}')
 
-def bombout(msg = '', punc=' !', pre='', post=''):
+def bombout(msg='', punc=' !', pre='', post=''):
     out = ""
-    for line in msg.splitlines():
+    if isinstance(msg, str):
         if len(punc) > 1:
-            out += '\t{0}{1}{2}'.format(punc[::-1], line, punc)
+            out += '    {0}{1}{2}'.format(punc[::-1], msg, punc)
         else:
-            out += '\t{0}{1}{0}'.format(punc, line)
+            out += '    {0}{1}{0}'.format(punc, msg)
+    else:
+        for line in msg:
+            if len(punc) > 1:
+                out += '    {0}{1}{2}'.format(punc[::-1], line, punc)
+            else:
+                out += '    {0}{1}{0}'.format(punc, line)
     exit('{}{}{}\n'.format(pre, out, post))
 
 def _get(token, target, proxy):
@@ -86,6 +98,55 @@ def pruneInput(inFile, outFile=None):
     out(prunedOut, punc='')
     writeResults(prunedOut, outFile)
     bombout(f'pruned results written to {outFile}')
+
+def mangle(inFile, outFile=None):
+    try:
+        f = open(inFile)
+    except IOError as err:
+        bombout(f'error opening file - {err}')
+
+    if not outFile:
+        outFile = f'mangled_{inFile}'
+
+    input = f.read().splitlines()
+
+    mangleRules = [
+    # name mangling formats lifted from linkScrape
+    '^([^ ]+) ([^ ]+)$',   # 1)FirstLast
+    # 2)LastFirst      
+    # 3)First.Last
+    # 4)Last.First
+    # 5)First_Last
+    # 6)Last_First
+    '^(.)[^ ]+ ([^ ]+)$',   # 7)FLast
+    # 8)LFirst
+    '^([^ ]+) (.)',         # 9)FirstL
+    # 10)F.Last
+    # 11)L.Firstname
+    '^(.{3})[^ ]+ (.{2})',  # 12)FirLa
+    # 13)Lastfir
+    '^([^ ]+) (.{7})'        # 14)FirstLastnam
+    # 15)LastF
+    # 16)LasFi
+    ]
+
+    mangled = ""
+
+    for rule in mangleRules:
+        out(rule, punc='')
+
+    bombout(punc='')
+
+    for line in input:
+        for rule in mangleRules:
+            r = search(filter, line)
+            if r:
+                line = line[:r.start()]+line[r.end():]
+        mangled += f'{line}\n'
+
+    #out(mangled, punc='')
+    #writeResults(mangled, outFile)
+    #bombout(f'mangled results written to {outFile}')
 
 def configure(args, confFile):
     from configparser import ConfigParser
@@ -141,7 +202,7 @@ def initialiseTokenli(username, password, proxy):
     redir = resp.headers.get('Location')
 
     if redir and 'feed' not in redir:
-        bombout('checkpoint violation? Location: "%s"' % redir, punc='?!')
+        bombout(f'checkpoint violation? Location: "{redir}"', punc='?!')
 
 def searchCompaniesli(domain, company, proxy):
     choice = list()
@@ -152,62 +213,59 @@ def searchCompaniesli(domain, company, proxy):
     
     resultBlobJSON = loads(typeaheadSearchResults.text)
 
-    for result in resultBlobJSON['elements']:
+    try:
+        elements = resultBlobJSON['elements']
+    except KeyError as err:
+        bombout(f'KeyError {err} - {resultBlobJSON}')
+
+    for result in elements:
         # TODO review the following line for potential improvements
         if 'keywords' in result or 'Event' in result['subtext']['text'] or 'GHOST' in result['image']['attributes'][0]['sourceType'] or 'GROUP' in result['image']['attributes'][0]['sourceType']:
             continue
 
+        #out(f'yipyip {result}', pre='\n', post='\n')
+
         try:
             companyId = match('urn:li:company:([0-9]+)', result['objectUrn']).group(1)
-        except AttributeError as e:
-            out(result, punc='?', post='\n')
-            out('nah bruv - id (%s)' % e, punc='.')
+        except AttributeError as err:
+            out(result['objectUrn'], punc='?', post='\n')
+            out(f'AttributeError - bad id ({err})', punc='')
             continue
 
         try:
-            companyRealm = match(r'(?:• [^ ]+ )?• \(?([^\)]+)', result['subtext']['text']).group(1)
-        except AttributeError as e:
-            out(result, punc='?', post='\n')
-            out('nah bruv - realm (%s)' % e, punc='..')
+            companyRealm = search(r'(?:• [^ ]+ )?• \(?([^\)]+)', result['subtext']['text']).group(1)
+        except AttributeError as err:
+            out(result['subtext']['text'], punc='~', post='\n')
+            out(f'AttributeError - bad realm ({err})', punc='')
             continue
 
         try:
             companyName = result['image']['attributes'][0]['miniCompany']['name']
-        except KeyError as e:
+        except KeyError as err:
             out(result, punc='?', post='\n')
-            out('nah bruv - name (%s)' % e, punc='...')
+            out(f'KeyError - bad name ({err})', punc='')
             continue
 
         try:
-            out('{}{:^16}\033[96m{}\033[00m  (\033[90m{}\033[00m)'.format(len(choice)+1, companyId, companyName, companyRealm, ), punc='', post='')
+            out('{}{:^16}\033[96m{}\033[00m   (\033[90m{}\033[00m)'.format(len(choice)+1, companyId, companyName, companyRealm), punc='', post='')
             choice.append(companyId)
-        except AttributeError as e:
-            out('nah bruv')
+        except AttributeError as err:
+            out(f'AttributeError - {err}')
 
     out('{}{:^16}{}'.format(0, '[EXIT]', '-none of the above-'), punc='', post='\n')
 
-    # TODO
-    # look good enough to continue? [Y/n] 
-    # 0     [EXIT]     -none of the above- 
-
-    # which target to scrape? > 1
-    # Traceback (most recent call last):
-    # File "/usr/local/bin/datalink", line 306, in <module>
-    #     main()
-    # File "/usr/local/bin/datalink", line 300, in main
-    #     args.id = searchCompaniesli(args.domain, args.company, args.proxy)
-    # File "/usr/local/bin/datalink", line 186, in searchCompaniesli
-    #     choice = choice[int(selection)-1]
-    # IndexError: list index out of range
     selection = ''
     while not selection:
         selection = intake('which target to scrape? > ')
         if selection == '0':
             bombout('exiting')
 
-    choice = choice[int(selection)-1]
-
-    out('okay, targeting %s' % choice, pre='\n', post='\n')
+    try:
+        choice = choice[int(selection)-1]
+    except IndexError as err:
+        bombout(f'IndexError: {err}')
+    
+    out(f'okay, targeting {choice}', pre='\n', post='\n')
 
     return choice
 
@@ -223,16 +281,17 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
 
     numEmployees = int(employeeblob['data']['metadata']['totalResultCount'])
     numPages = ceil(numEmployees/10)
-    out('target appears to have %s employees (across %s pages of results)' % (numEmployees, numPages), post='\n')
+
+    out(f'target has {numEmployees} visible employees across {numPages} pages of results', pre='\n')
 
     if numEmployees > 1000:
         if not force:
             out('target has too many results for a free account, stopping at 100th page')
             numPages = 100
         else:
-            out('user has chosen to enumerate all %s target pages' % (numPages))
+            out(f'user has chosen to enumerate all {numPages} target pages')
 
-        out(punc='')
+    out(punc='')
 
     for employee in employeeblob['included']:
         emp = employee.get('title')
@@ -247,7 +306,7 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
             output.append([name])
 
     for pageCount in range(2, numPages+1):
-        subtarget = '{}&page={}'.format(target, pageCount) 
+        subtarget = f'{target}&page={pageCount}' 
 
         resp = _get(linkedin, subtarget, proxy)
 
@@ -261,15 +320,15 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
                 name = emp['text']
                 #try:
                 #    title = employee['headline']['text']
-                #except KeyError as e:
-                #    out('oops %s' % e)
+                #except KeyError as err:
+                #    out(f'oops {err}')
                 #location = employee['subline']['text']
                 #out('{:28}{:32}{}'.format(name, location, title), punc='')
                 #output.append([name, location, title])
                 out('{:28}'.format(name), punc='')
                 output.append([name])
 
-    names=raw = ''
+    names = raw = ''
     for entry in output:
         #raw += f'{entry[0]},{entry[1]},{entry[2]}\n'
         names += f'{entry[0]}\n'
@@ -285,25 +344,35 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
     writeResults(names, fileout)
     #writeResults(raw, f'raw_{fileout}')
 
-    # TODO this should count lines not total length
-    # out(f'wrote {len(names)} results to {fileout}', pre='\n')
-    out(f'results written to {fileout}', pre='\n')
+    lines = names.split("\n")
+
+    out(f'wrote {len(lines)-1} results to {fileout}', pre='\n')
 
 def main():
     parser = ArgumentParser()
+    parser.add_argument('-i', '--id')
     parser.add_argument('-d', '--domain')
     parser.add_argument('-c', '--company')
     parser.add_argument('-u', '--username')
     parser.add_argument('-p', '--password')
     parser.add_argument('-o', '--output')
-    parser.add_argument('-f', '--force', action='store_true')
+    parser.add_argument('-m', '--mangle')
     parser.add_argument('-P', '--prune')
-    parser.add_argument('--id')
-    parser.add_argument('--conf')
+    parser.add_argument('-f', '--force', action='store_true')
+    parser.add_argument('-v', '--version', action='store_true')
     parser.add_argument('--demo', action='store_true')
+    parser.add_argument('--conf')
     parser.add_argument('--proxy')
  
     args = parser.parse_args()
+
+    if args.version:
+        bombout(f'version {version}', punc='')
+
+    if args.mangle:
+        # need to prune before mangling but code isn't setup for it atm
+        #pruneInput(args.mangle, args.output)
+        mangle(args.mangle, args.output)
 
     if args.prune:
         pruneInput(args.prune, args.output)
@@ -320,23 +389,22 @@ def main():
         if not args.company:
             while not args.domain:
                 args.domain = intake('target domain? [example.com] > ')
+            #args.company = args.domain.split('.')[0]
 
-        if not args.company:
-            args.company = args.domain.split('.')[0]
-
+    out(punc='')
     if args.domain:
-        out('domain:\t%s' % (args.domain), '', pre='\n')
+        out(f'domain: \t{args.domain}', '')
     if args.company:
-        out('company:\t%s' % (args.company), '')
+        out(f'company:\t{args.company}', '')
     if args.id:
-        out('target id:\t%s' % (args.id), '', pre='\n')
-    out('username:\t%s' % (args.username), '')
+        out(f'target id:\t{args.id}', '')
+    out(f'username:\t{args.username}', '')
     if not args.demo:
-        out('password:\t%s' % (args.password), '')
+        out(f'password:\t{args.password}', '')
     if args.proxy:
-        out('proxy:\t\t%s' % (args.proxy), '')
+        out(f'proxy:\t{args.proxy["http"]}', '')
 
-    if intake('\tlook good enough to continue? [Y/n] ', pre='\n').lower() not in {'', 'y', 'ye', 'yes', 'yeet', 'yarp', 'yolo'}:
+    if intake('    look good enough to continue? [Y/n] ', pre='\n').lower() not in {'', 'y', 'ye', 'yes', 'yeet', 'yarp', 'yolo'}:
         bombout('exiting')
 
     initialiseTokenli(args.username, args.password, args.proxy)

@@ -2,7 +2,7 @@
 
 # datalink - an open source intelligence gathering tool
 # from caesarcipher, inspired by linkScrape
-version = '20210719'
+version = '20220212'
 
 from re import match, search
 from os import path, getenv, getcwd
@@ -29,7 +29,7 @@ def intake(msg, pre=None):
         bombout(punc='')
     return response
 
-def out(msg='', punc='!', pre='', post=''):
+def out(msg='', punc=' !', pre='', post=''):
     out = ""
     if isinstance(msg, str):
         if len(punc) > 1:
@@ -174,13 +174,13 @@ def configure(args, confFile):
 def writeResults(output, fileName = 'output.txt'):
     try:
         f = open(fileName, 'w')
-    except IOError as err:
-        bombout(f'error writing file {err}')
+    except (TypeError, IOError) as err:
+        bombout(f'error writing output file "{fileName}" - {err}')
 
     f.write(output)
     f.close()
 
-def initialiseTokenli(username, password, proxy):
+def initializeTokenli(username, password, proxy):
     global linkedin
     linkedin = Session()
     linkedin.headers.update({'User-Agent': None})
@@ -269,9 +269,72 @@ def searchCompaniesli(domain, company, proxy):
 
     return choice
 
+def getContactsli(outfile=None, proxy=None):
+    output = list()
+    target = 'https://www.linkedin.com/search/results/people/?network="F"'
+
+    resp = _get(linkedin, target, proxy)
+
+    page = html.document_fromstring(resp.content)
+    contactblob = loads(page.xpath('//text()[contains(., "totalResultCount")]')[0].strip())
+
+    numConnections = int(contactblob['data']['metadata']['totalResultCount'])
+    numPages = ceil(numConnections/10)
+
+    out(f'downloading {numConnections} contacts from {numPages} pages', pre='\n', post='\n')
+
+    for contact in contactblob['included']:
+        con = contact.get('title')
+        
+        if con:
+            name = con['text'] 
+            #title = contact['headline']['text']
+            #location = contact['subline']['text']
+            #out('{:28}{:32}{}'.format(name, location, title), punc='')
+            #output.append([name, location, title])
+            out('{:28}'.format(name), pre=len(output)+1, punc='')
+            output.append([name])
+            #out(f'"{contact}"', punc='')
+
+    for pageCount in range(2, numPages+1):
+        subtarget = f'{target}&page={pageCount}' 
+
+        resp = _get(linkedin, subtarget, proxy)
+
+        page = html.document_fromstring(resp.content)
+        contactblob = loads(page.xpath('//text()[contains(., "totalResultCount")]')[0].strip())
+
+        for contact in contactblob['included']:
+            con = contact.get('title')
+            
+            if con:
+                name = con['text'] 
+                #title = contact['headline']['text']
+                #location = contact['subline']['text']
+                #out('{:28}{:32}{}'.format(name, location, title), punc='')
+                #output.append([name, location, title])
+                out('{:28}'.format(name), pre=len(output)+1, punc='')
+                output.append([name])
+                #out(f'"{contact}"', punc='')
+
+    names = raw = ''
+    for entry in output:
+        #raw += f'{entry[0]},{entry[1]},{entry[2]}\n'
+        names += f'{entry[0]}\n'
+
+    if not outfile:
+        outfile = 'contacts.txt'
+
+    writeResults(names, outfile)
+    #writeResults(raw, f'raw_{outfile}')
+
+    lines = names.split("\n")
+
+    out(f'wrote {len(lines)-1} results to {outfile}', pre='\n')
+
 def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
     output = list()
-    target = 'https://www.linkedin.com/search/results/people/?facetCurrentCompany=%s' % id
+    target = f'https://www.linkedin.com/search/results/people/?facetCurrentCompany={id}'
 
     resp = _get(linkedin, target, proxy)
 
@@ -357,6 +420,7 @@ def main():
     parser.add_argument('-p', '--password')
     parser.add_argument('-o', '--output')
     parser.add_argument('-m', '--mangle')
+    parser.add_argument('-D', '--download', action='store_true')
     parser.add_argument('-P', '--prune')
     parser.add_argument('-f', '--force', action='store_true')
     parser.add_argument('-v', '--version', action='store_true')
@@ -385,34 +449,40 @@ def main():
         parser.print_help()
         bombout('credentials not specified, but are required', pre='\n')
 
-    if not args.id:
+    if not args.id and not args.download:
         if not args.company:
             while not args.domain:
                 args.domain = intake('target domain? [example.com] > ')
             #args.company = args.domain.split('.')[0]
 
-    out(punc='')
-    if args.domain:
-        out(f'domain: \t{args.domain}', '')
-    if args.company:
-        out(f'company:\t{args.company}', '')
-    if args.id:
-        out(f'target id:\t{args.id}', '')
+    if not args.download:
+        out(punc='')
+        if args.domain:
+            out(f'domain: \t{args.domain}', '')
+        if args.company:
+            out(f'company:\t{args.company}', '')
+        if args.id:
+            out(f'target id:\t{args.id}', '')
+    else:
+        out('Downloading account contacts', pre='\n', post='\n')
     out(f'username:\t{args.username}', '')
     if not args.demo:
         out(f'password:\t{args.password}', '')
     if args.proxy:
         out(f'proxy:\t{args.proxy["http"]}', '')
 
-    if intake('    look good enough to continue? [Y/n] ', pre='\n').lower() not in {'', 'y', 'ye', 'yes', 'yeet', 'yarp', 'yolo'}:
+    if intake('look good enough to continue? [Y/n] ', pre='\n    ').lower() not in {'', 'y', 'ye', 'yes', 'yeet', 'yarp', 'yolo'}:
         bombout('exiting')
 
-    initialiseTokenli(args.username, args.password, args.proxy)
+    initializeTokenli(args.username, args.password, args.proxy)
 
-    if not args.id:
-        args.id = searchCompaniesli(args.domain, args.company, args.proxy)
+    if args.download:
+        getContactsli(args.output, args.proxy)
+    else:
+        if not args.id:
+            args.id = searchCompaniesli(args.domain, args.company, args.proxy)
 
-    getCompanyInfoli(args.id, args.company, args.output, args.force, args.proxy)
+        getCompanyInfoli(args.id, args.company, args.output, args.force, args.proxy)
 
 if __name__ == '__main__':
     main()

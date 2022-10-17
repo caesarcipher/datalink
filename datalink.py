@@ -2,7 +2,7 @@
 
 # datalink - an open source intelligence gathering tool
 # from caesarcipher, inspired by linkScrape
-version = '20220212'
+version = '20221016'
 
 from re import match, search
 from os import path, getenv, getcwd
@@ -60,16 +60,14 @@ def bombout(msg='', punc=' !', pre='', post=''):
     exit('{}{}{}\n'.format(pre, out, post))
 
 def _get(token, target, proxy):
-    if not proxy:
-        return token.get(target)
-    else:
+    if proxy:
         return token.get(target, proxies=proxy, verify=False)
+    return token.get(target)
 
-def _post(token, target, proxy):
-    if not proxy:
-        return token.post(target)
-    else:
-        return token.post(target, proxies=proxy, verify=False)
+def _post(token, target, data, proxy):
+    if proxy:
+        return token.post(target, allow_redirects=False, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'}, proxies=proxy, verify=False)
+    return token.post(target, allow_redirects=False, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
 
 def pruneInput(inFile, outFile=None):
     try:
@@ -196,11 +194,12 @@ def initializeTokenli(username, password, proxy):
     loginCsrf = match('"v=2&([^"]+)', loginPageRequest.cookies['bcookie']).group(1)
     data = 'session_key={}&session_password={}&loginCsrfParam={}'.format(quser, qpass, loginCsrf)
 
-    # TODO - convert to _post() call
-    resp = linkedin.post('https://www.linkedin.com/login-submit', allow_redirects=False, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})#, proxies=proxies, verify=False)
+    #resp = linkedin.post('https://www.linkedin.com/login-submit', allow_redirects=False, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})#, proxies=proxies, verify=False)
+    resp = _post(linkedin, 'https://www.linkedin.com/login-submit', data, proxy)
 
     redir = resp.headers.get('Location')
 
+    # TODO automatically bypass checkpoint errors
     if redir and 'feed' not in redir:
         bombout(f'checkpoint violation? Location: "{redir}"', punc='?!')
 
@@ -283,27 +282,7 @@ def getContactsli(outfile=None, proxy=None):
 
     out(f'downloading {numConnections} contacts from {numPages} pages', pre='\n', post='\n')
 
-    for contact in contactblob['included']:
-        con = contact.get('title')
-        
-        if con:
-            name = con['text'] 
-            #title = contact['headline']['text']
-            #location = contact['subline']['text']
-            #out('{:28}{:32}{}'.format(name, location, title), punc='')
-            #output.append([name, location, title])
-            out('{:28}'.format(name), pre=len(output)+1, punc='')
-            output.append([name])
-            #out(f'"{contact}"', punc='')
-
-    for pageCount in range(2, numPages+1):
-        subtarget = f'{target}&page={pageCount}' 
-
-        resp = _get(linkedin, subtarget, proxy)
-
-        page = html.document_fromstring(resp.content)
-        contactblob = loads(page.xpath('//text()[contains(., "totalResultCount")]')[0].strip())
-
+    try:
         for contact in contactblob['included']:
             con = contact.get('title')
             
@@ -313,9 +292,32 @@ def getContactsli(outfile=None, proxy=None):
                 #location = contact['subline']['text']
                 #out('{:28}{:32}{}'.format(name, location, title), punc='')
                 #output.append([name, location, title])
-                out('{:28}'.format(name), pre=len(output)+1, punc='')
+                out('{:28}'.format(name), punc='')
                 output.append([name])
                 #out(f'"{contact}"', punc='')
+
+        for pageCount in range(2, numPages+1):
+            subtarget = f'{target}&page={pageCount}' 
+
+            resp = _get(linkedin, subtarget, proxy)
+
+            page = html.document_fromstring(resp.content)
+            contactblob = loads(page.xpath('//text()[contains(., "totalResultCount")]')[0].strip())
+
+            for contact in contactblob['included']:
+                con = contact.get('title')
+                
+                if con:
+                    name = con['text'] 
+                    #title = contact['headline']['text']
+                    #location = contact['subline']['text']
+                    #out('{:28}{:32}{}'.format(name, location, title), punc='')
+                    #output.append([name, location, title])
+                    out('{:28}'.format(name), punc='')
+                    output.append([name])
+                    #out(f'"{contact}"', punc='')
+    except (KeyboardInterrupt):
+        bombout(punc='')
 
     names = raw = ''
     for entry in output:
@@ -340,7 +342,7 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
 
     page = html.document_fromstring(resp.content)
 
-    employeeblob = loads(page.xpath('//text()[contains(., "memberDistance")]')[0].strip())
+    employeeblob = loads(page.xpath('//text()[contains(., "totalResultCount")]')[0].strip())
 
     numEmployees = int(employeeblob['data']['metadata']['totalResultCount'])
     numPages = ceil(numEmployees/10)
@@ -356,40 +358,43 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
 
     out(punc='')
 
-    for employee in employeeblob['included']:
-        emp = employee.get('title')
-        
-        if emp:
-            name = emp['text'] 
-            #title = employee['headline']['text']
-            #location = employee['subline']['text']
-            #out('{:28}{:32}{}'.format(name, location, title), punc='')
-            #output.append([name, location, title])
-            out('{:28}'.format(name), punc='')
-            output.append([name])
-
-    for pageCount in range(2, numPages+1):
-        subtarget = f'{target}&page={pageCount}' 
-
-        resp = _get(linkedin, subtarget, proxy)
-
-        page = html.document_fromstring(resp.content)
-        employeeblob = loads(page.xpath('//text()[contains(., "memberDistance")]')[-1].strip())
-
+    try:
         for employee in employeeblob['included']:
             emp = employee.get('title')
-
+            
             if emp:
-                name = emp['text']
-                #try:
-                #    title = employee['headline']['text']
-                #except KeyError as err:
-                #    out(f'oops {err}')
+                name = emp['text'] 
+                #title = employee['headline']['text']
                 #location = employee['subline']['text']
                 #out('{:28}{:32}{}'.format(name, location, title), punc='')
                 #output.append([name, location, title])
                 out('{:28}'.format(name), punc='')
                 output.append([name])
+
+        for pageCount in range(2, numPages+1):
+            subtarget = f'{target}&page={pageCount}' 
+
+            resp = _get(linkedin, subtarget, proxy)
+
+            page = html.document_fromstring(resp.content)
+            employeeblob = loads(page.xpath('//text()[contains(., "totalResultCount")]')[-1].strip())
+
+            for employee in employeeblob['included']:
+                emp = employee.get('title')
+
+                if emp:
+                    name = emp['text']
+                    #try:
+                    #    title = employee['headline']['text']
+                    #except KeyError as err:
+                    #    out(f'oops {err}')
+                    #location = employee['subline']['text']
+                    #out('{:28}{:32}{}'.format(name, location, title), punc='')
+                    #output.append([name, location, title])
+                    out('{:28}'.format(name), punc='')
+                    output.append([name])
+    except (KeyboardInterrupt):
+        bombout(punc='')
 
     names = raw = ''
     for entry in output:
@@ -413,20 +418,20 @@ def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument('-i', '--id')
-    parser.add_argument('-d', '--domain')
-    parser.add_argument('-c', '--company')
-    parser.add_argument('-u', '--username')
-    parser.add_argument('-p', '--password')
-    parser.add_argument('-o', '--output')
-    parser.add_argument('-m', '--mangle')
-    parser.add_argument('-D', '--download', action='store_true')
-    parser.add_argument('-P', '--prune')
-    parser.add_argument('-f', '--force', action='store_true')
-    parser.add_argument('-v', '--version', action='store_true')
-    parser.add_argument('--demo', action='store_true')
-    parser.add_argument('--conf')
-    parser.add_argument('--proxy')
+    parser.add_argument('-i', '--id', help='numeric id of target', metavar='\b')
+    parser.add_argument('-d', '--domain', help='domain of target (example.org)', metavar='\b')
+    parser.add_argument('-c', '--company', help='company name of target (Example Corp)', metavar='\b')
+    parser.add_argument('-u', '--username', metavar='\b')
+    parser.add_argument('-p', '--password', metavar='\b')
+    parser.add_argument('-o', '--output', help='output file (default: output.txt)', metavar='\b')
+    parser.add_argument('-v', '--version', action='store_true', help='current version')
+    parser.add_argument('-C', '--conf', help='configuration file', metavar='\b')
+    parser.add_argument('-D', '--download', action='store_true', help='download list of first degree user connections of account')
+    parser.add_argument('-F', '--force', action='store_true', help='force download list of users beyond upper limit (if using a paid account)')
+    parser.add_argument('-H', '--hide', '--demo', action='store_true', help='hide password in output')
+    parser.add_argument('-P', '--prune', help='normalize input list into typical \'first last\' format', metavar='\b')
+    parser.add_argument('-M', '--mangle', help='convert input list of names into common corporate formats (implies --prune)', metavar='\b')
+    parser.add_argument('-X', '--proxy', help='proxy for connections (NOT OPSEC safe. session init cxn ignores proxy)', metavar='\b')
  
     args = parser.parse_args()
 
@@ -466,7 +471,7 @@ def main():
     else:
         out('Downloading account contacts', pre='\n', post='\n')
     out(f'username:\t{args.username}', '')
-    if not args.demo:
+    if not args.hide:
         out(f'password:\t{args.password}', '')
     if args.proxy:
         out(f'proxy:\t{args.proxy["http"]}', '')

@@ -2,7 +2,7 @@
 
 # datalink - an open source intelligence gathering tool
 # made by caesarcipher
-version = '20241003'
+version = '20260104'
 
 from re import match, search
 from os import path, getenv, getcwd
@@ -10,12 +10,11 @@ from sys import argv
 from math import ceil
 from lxml import html
 from json import loads
+from urllib3 import util
+from datetime import date
 from argparse import ArgumentParser
 from requests import get, post, Session
 from urllib.parse import quote
-
-from urllib3 import disable_warnings, util
-disable_warnings()
 
 linkedin = None
 
@@ -33,7 +32,7 @@ def pruneInput(inFile, outFile=None):
 
     input = f.read().splitlines()
 
-    prunedOut = ""
+    prunedOut = ''
 
     for line in input:
         for filter in filters:
@@ -44,7 +43,7 @@ def pruneInput(inFile, outFile=None):
                 #out(line, post='\n')
         prunedOut += f'{line}\n'
 
-    out(prunedOut, punc='')
+    out(prunedOut)
     writeFile(prunedOut, outFile)
     bombout(f'pruned results written to {outFile}')
 
@@ -79,64 +78,57 @@ def mangle(inFile, outFile=None):
     # 16)LasFi
     ]
 
-    mangled = ""
+    mangled = ''
 
     for rule in mangleRules:
-        out(rule, punc='')
+        out(rule)
 
     bombout(punc='')
 
     for line in input:
         for rule in mangleRules:
-            r = search(filter, line)
+            r = search(rule, line)
             if r:
                 line = line[:r.start()]+line[r.end():]
         mangled += f'{line}\n'
 
-    #out(mangled, punc='')
+    #out(mangled)
     #writeFile(mangled, outFile)
     #bombout(f'mangled results written to {outFile}')
 # POST-PROCESSING -----------------
 
 def intake(msg, pre=None):
+    message = msg
+
     try:
         if pre:
-            response = input(f'{pre}{msg}')
-        else:
-            response = input(msg)
+            message = f'{pre}{msg}'
+        response = input(message)
     except (KeyboardInterrupt, EOFError):
         bombout(punc='')
+
     return response
 
-def out(msg='', punc=' !', pre='', post=''):
-    out = ""
-    if isinstance(msg, str):
-        if len(punc) > 1:
-            out += '    {0}{1}{2}'.format(punc[::-1], msg, punc)
-        else:
-            out += '    {0}{1}{0}'.format(punc, msg)
-    else:
-        for line in msg:
-            if len(punc) > 1:
-                out += '    {0}{1}{2}'.format(punc[::-1], line, punc)
-            else:
-                out += '    {0}{1}{0}'.format(punc, line)
-    print(f'{pre}{out}{post}')
-
 def bombout(msg='', punc=' !', pre='', post=''):
-    out = ""
-    if isinstance(msg, str):
+    out(msg, punc, pre, post, do_exit=True)
+
+def out(msg='', punc='', pre='', post='', do_exit=False):
+    output = ''
+
+    # Handle string vs iterable
+    messages = [msg] if isinstance(msg, str) else msg
+
+    for line in messages:
         if len(punc) > 1:
-            out += '    {0}{1}{2}'.format(punc[::-1], msg, punc)
+            output += f'{punc[::-1]}{line}{punc}'
         else:
-            out += '    {0}{1}{0}'.format(punc, msg)
-    else:
-        for line in msg:
-            if len(punc) > 1:
-                out += '    {0}{1}{2}'.format(punc[::-1], line, punc)
-            else:
-                out += '    {0}{1}{0}'.format(punc, line)
-    exit('{}{}{}\n'.format(pre, out, post))
+            output += f'{punc}{line}{punc}'
+
+    result = f'{pre}{output}{post}'
+
+    if do_exit:
+        exit(f'{result}\n')
+    print(result)
 
 def _post(token, target, data, proxy):
     if proxy:
@@ -169,6 +161,9 @@ def configure(args, confFile):
     args.password = config.get('linkedin.com', 'password')
 
     if config.has_option('linkedin.com', 'proxy'):
+        from urllib3 import disable_warnings, util
+        disable_warnings()
+
         prox = config.get('linkedin.com', 'proxy')
         args.proxy = { 'http': prox, 'https': prox }
 
@@ -181,7 +176,7 @@ def writeFile(output, fileName = 'output.txt'):
     f.write(output)
     f.close()
 
-def initializeTokenli(username, password, proxy):
+def initializeTokenLI(username, password, proxy):
     global linkedin
     linkedin = Session()
     linkedin.headers.update({'User-Agent': util.SKIP_HEADER})
@@ -197,7 +192,6 @@ def initializeTokenli(username, password, proxy):
     loginCsrf = match('"v=2&([^"]+)', loginPageRequest.cookies['bcookie']).group(1)
     data = 'session_key={}&session_password={}&loginCsrfParam={}'.format(quser, qpass, loginCsrf)
 
-    #resp = linkedin.post('https://www.linkedin.com/login-submit', allow_redirects=False, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})#, proxies=proxies, verify=False)
     resp = _post(linkedin, 'https://www.linkedin.com/login-submit', data, proxy)
 
     redir = resp.headers.get('Location')
@@ -206,18 +200,23 @@ def initializeTokenli(username, password, proxy):
     if redir and 'feed' not in redir:
         bombout(f'checkpoint violation? Location: "{redir}"', punc='?!')
 
-def searchCompaniesli(domain, company, proxy):
+def searchCompaniesLI(domain, company, proxy):
     choice = list()
 
     target = 'https://www.linkedin.com/voyager/api/graphql?variables=(query:%s)&queryId=voyagerSearchDashTypeahead.e2aad44974edcf1ef5db22e743e8f838' % (domain if domain else company)
     typeaheadSearchResults = _get(linkedin, target, proxy)
     
     resultBlobJSON = loads(typeaheadSearchResults.text)
+    # out(f'bing bong {resultBlobJSON['data']['searchDashTypeaheadByGlobalTypeahead']['elements']}')
+    # out(f'bing bong {resultBlobJSON}')
 
     try:
         elements = resultBlobJSON['data']['searchDashTypeaheadByGlobalTypeahead']['elements']
     except KeyError as err:
         bombout(f'KeyError {err} - {resultBlobJSON}', pre='\n')
+
+    if not len(elements):
+        bombout('query returned no results. if a protocol change has broken the search feature, directly providing a target ID may still succeed')
 
     for result in elements:
         if not result['entityLockupView']['trackingUrn'] or 'organizationalPage' in result['entityLockupView']['trackingUrn'] or 'member' in result['entityLockupView']['trackingUrn']:
@@ -228,7 +227,7 @@ def searchCompaniesli(domain, company, proxy):
         except AttributeError as err:
             out('failed id lookup')
             out(str(result['entityLockupView']), punc=' ?', post='\n')
-            out(f'AttributeError - bad id ({err})', punc='')
+            out(f'AttributeError - bad id ({err})')
             continue
 
         try:
@@ -236,41 +235,41 @@ def searchCompaniesli(domain, company, proxy):
         except AttributeError as err:
             out('failed realm lookup')
             out(result['entityLockupView']['subtitle']['text'], punc='~', post='\n')
-            out(f'AttributeError - bad realm ({err})', punc='')
+            out(f'AttributeError - bad realm ({err})')
             continue
 
         try:
             companyName = result['entityLockupView']['title']['text']
         except KeyError as err:
             out('failed company lookup')
-            out(result, punc='?', post='\n')
-            out(f'KeyError - bad name ({err})', punc='')
+            out(result, punc=' ?', post='\n')
+            out(f'KeyError - bad name ({err})')
             continue
 
         try:
-            out('{}{:^16}\033[96m{}\033[00m\t(\033[90m{}\033[00m)'.format(len(choice)+1, companyId, companyName, companyRealm), punc='', post='')
+            out('{}{:^16}\033[96m{}\033[00m\t(\033[90m{}\033[00m)'.format(len(choice)+1, companyId, companyName, companyRealm), post='')
             choice.append(companyId)
         except AttributeError as err:
             out(f'AttributeError - {err}')
 
-    out('{}{:^16}{}'.format(0, '[EXIT]', '-none of the above-'), punc='', post='\n')
+    out('{}{:^16}{}'.format(0, '[EXIT]', '- none of the above -'), post='\n')
 
     selection = ''
     while not selection:
         selection = intake('which target to scrape? > ')
         if selection == '0':
-            bombout('exiting')
+            bombout('exiting', pre='\n')
 
     try:
         choice = choice[int(selection)-1]
     except IndexError as err:
         bombout(f'IndexError: {err}')
     
-    out(f'okay, targeting {choice}', pre='\n', post='\n')
+    out(f'    okay, targeting cmopany with id {choice}', pre='\n', post='\n')
 
     return choice
 
-def getContactsli(outfile=None, proxy=None):
+def getContactsLI(outfile=None, proxy=None):
     output = list()
     target = 'https://www.linkedin.com/search/results/people/?network="F"'
 
@@ -292,11 +291,11 @@ def getContactsli(outfile=None, proxy=None):
                 name = con['text'] 
                 #title = contact['headline']['text']
                 #location = contact['subline']['text']
-                #out('{:28}{:32}{}'.format(name, location, title), punc='')
+                #out('{:28}{:32}{}'.format(name, location, title))
                 #output.append([name, location, title])
-                out('{:28}'.format(name), punc='')
+                out('{:28}'.format(name))
                 output.append([name])
-                #out(f'"{contact}"', punc='')
+                #out(f'"{contact}"')
 
         for pageCount in range(2, numPages+1):
             subtarget = f'{target}&page={pageCount}' 
@@ -313,11 +312,11 @@ def getContactsli(outfile=None, proxy=None):
                     name = con['text'] 
                     #title = contact['headline']['text']
                     #location = contact['subline']['text']
-                    #out('{:28}{:32}{}'.format(name, location, title), punc='')
+                    #out('{:28}{:32}{}'.format(name, location, title))
                     #output.append([name, location, title])
-                    out('{:28}'.format(name), punc='')
+                    out('{:28}'.format(name))
                     output.append([name])
-                    #out(f'"{contact}"', punc='')
+                    #out(f'"{contact}"')
     except (KeyboardInterrupt):
         bombout(punc='')
 
@@ -330,113 +329,100 @@ def getContactsli(outfile=None, proxy=None):
         outfile = 'contacts.txt'
 
     writeFile(names, outfile)
-    #writeFile(raw, f'raw_{outfile}')
+    writeFile(raw, f'raw_{outfile}')
 
     lines = names.split("\n")
 
     out(f'wrote {len(lines)-1} results to {outfile}', pre='\n')
 
-def getCompanyInfoli(id, company, outfile=None, force=None, proxy=None):
+def getCompanyInfoLI(id, company, outfile=None, proxy=None):
     output = list()
-    target = f'https://www.linkedin.com/search/results/people/?facetCurrentCompany={id}'
+    companypage = f'https://www.linkedin.com/search/results/people/?facetCurrentCompany={id}'
 
-    resp = _get(linkedin, target, proxy)
-    page = html.document_fromstring(resp.content)
+    pages = 1
+    while True:
+        target = f'{companypage}&page={pages}'
+        startlen = len(output)
 
-    employeeblob = loads(page.xpath('//text()[contains(., "totalResultCount")]')[0].strip())
+        resp = _get(linkedin, target, proxy)
+        page = html.document_fromstring(resp.content)
+        resultblob = page.xpath('//a/div/div[1]/div[1]/p/a[1] | //a/div/div[1]/div[1]/div/p')
 
-    numEmployees = int(employeeblob['data']['data']['searchDashClustersByAll']['metadata']['totalResultCount'])
-    numPages = ceil(numEmployees/10)
+        try:
+            while resultblob:
+                name = resultblob.pop(0).text_content().strip()
+                location = resultblob.pop(0).text_content().strip()
+                title = resultblob.pop(0).text_content().strip()
 
-    out(f'target has {numEmployees} visible employees across {numPages} pages of results', pre='\n')
-
-    if numEmployees > 1000:
-        if not force:
-            out('target has too many results for a free account, stopping at 100th page')
-            numPages = 100
-        else:
-            out(f'user has chosen to enumerate all {numPages} target pages')
-
-    out(punc='')
-
-    try:
-        for employee in employeeblob['included']:
-            emp = employee.get('title')
-            
-            if emp:
-                if 'LinkedIn Member' in emp['text']:
+                if 'LinkedIn Member' in name:
+                    out(f'{name} {title} {location}', punc='!?')
                     continue
-                name = emp['text'] 
-                #title = employee['headline']['text']
-                #location = employee['subline']['text']
-                #out('{:28}{:32}{}'.format(name, location, title), punc='')
-                #output.append([name, location, title])
-                out('{:28}'.format(name), punc='')
-                output.append([name])
 
-        for pageCount in range(2, numPages+1):
-            subtarget = f'{target}&page={pageCount}' 
+                output.append([name, location, title])
+                # out('{:28}{:32}{}'.format(name, location, title))
+                out(name)
+        except (KeyboardInterrupt):
+            bombout(punc='')
 
-            resp = _get(linkedin, subtarget, proxy)
+        # for entry in output:
+        #     raw += f'{entry[0]},{entry[1]},{entry[2]}\n'
+        #     out('{:28}{:32}{}'.format(entry[0],entry[1],entry[2]))
+        #     out(f'{entry[0]}')
 
-            page = html.document_fromstring(resp.content)
-            employeeblob = loads(page.xpath('//text()[contains(., "totalResultCount")]')[-1].strip())
+        numresults = len(output) - startlen
+        if not numresults:
+            out(f'collected {len(output)} names over {pages-1} pages', punc=' -', pre='\n')
+            break
+        pages += 1
 
-            for employee in employeeblob['included']:
-                emp = employee.get('title')
+    thedate = date.today().strftime('%Y%m%d')
 
-                if emp:
-                    if 'LinkedIn Member' in emp['text']:
-                        continue
-                    name = emp['text']
-                    #try:
-                    #    title = employee['headline']['text']
-                    #except KeyError as err:
-                    #    out(f'oops {err}')
-                    #location = employee['subline']['text']
-                    #out('{:28}{:32}{}'.format(name, location, title), punc='')
-                    #output.append([name, location, title])
-                    out('{:28}'.format(name), punc='')
-                    output.append([name])
-    except (KeyboardInterrupt):
-        bombout(punc='')
-
-    names = raw = ''
-    for entry in output:
-        #raw += f'{entry[0]},{entry[1]},{entry[2]}\n'
-        names += f'{entry[0]}\n'
-
-    # TODO probably ought to add timestamps
     if outfile:
         fileout = outfile
+        rawout = f'raw_{fileout}'
     elif company:
-        fileout = f'{company}.txt'
+        fileout = f'{company}_linkedin_{thedate}'
+        rawout = f'raw_{fileout}.tsv'
     else:
-        fileout = f'{id}.txt'
+        fileout = f'{id}_linkedin_{thedate}'
+        rawout = f'raw_{fileout}.tsv'
 
-    writeFile(names, fileout)
-    #writeFile(raw, f'raw_{fileout}')
+    writeFile('\n'.join(entry[0] for entry in output), fileout)
+    writeFile('NAME\tTITLE\tLOCATION\n' + '\n'.join('\t'.join(entry) for entry in output), rawout)
 
-    lines = names.split("\n")
-
-    out(f'wrote {len(lines)-1} results to {fileout}', pre='\n')
+    out(f'results written to {fileout}.txt and {rawout}', punc=' -', post='\n')
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument('-i', '--id', help='numeric id of target', metavar='\b')
-    parser.add_argument('-d', '--domain', help='domain of target (example.org)', metavar='\b')
-    parser.add_argument('-c', '--company', help='company name of target (Example Corp)', metavar='\b')
-    parser.add_argument('-u', '--username', metavar='\b')
-    parser.add_argument('-p', '--password', metavar='\b')
-    parser.add_argument('-o', '--outfile', help='output file (default: output.txt)', metavar='\b')
+
+    # General options
     parser.add_argument('-v', '--version', action='store_true', help='current version')
-    parser.add_argument('-C', '--conf', help='configuration file', metavar='\b')
-    parser.add_argument('-D', '--download', action='store_true', help='download list of first degree user connections of account')
-    #parser.add_argument('-F', '--force', action='store_true', help='force download list of users beyond upper limit (if using a paid account)')
-    parser.add_argument('-H', '--hide', '--demo', action='store_true', help='hide password in output')
-    #parser.add_argument('-P', '--prune', help='normalize input list into typical \'first last\' format', metavar='\b')
-    #parser.add_argument('-M', '--mangle', help='convert input list of names into common corporate formats (implies --prune)', metavar='\b')
-    parser.add_argument('-X', '--proxy', help='proxy for connections', metavar='\b')
+
+    # Authentication
+    auth_group = parser.add_argument_group('authentication')
+    auth_group.add_argument('-u', '--username', help='account username', metavar='USER')
+    auth_group.add_argument('-p', '--password', help='account password', metavar='PASS')
+    auth_group.add_argument('-C', '--conf', help='configuration file', metavar='FILE')
+
+    # Operation modes
+    mode_group = parser.add_argument_group('operation modes')
+    mode_group.add_argument('-D', '--download', action='store_true', help='download list of first degree user connections (excludes target options)')
+    #mode_group.add_argument('-P', '--prune', help='normalize input list into typical \'first last\' format', metavar='NAME')
+    #mode_group.add_argument('-M', '--mangle', help='convert input list of names into common corporate formats (implies --prune)', metavar='NAME')
+
+    # Target options
+    target_group = parser.add_argument_group('target options')
+    target_group.add_argument('-i', '--id', help='numeric id of target', metavar='ID')
+    target_group.add_argument('-d', '--domain', help='domain of target (example.org)', metavar='DOMAIN')
+    target_group.add_argument('-c', '--company', help='company name of target (Example Corp)', metavar='COMPANY')
+
+    # Output options
+    output_group = parser.add_argument_group('output options')
+    output_group.add_argument('-o', '--outfile', help='output file (default: output.txt)', metavar='FILE')
+
+    # Network options
+    network_group = parser.add_argument_group('network options')
+    network_group.add_argument('-X', '--proxy', help='proxy for connections', metavar='URL')
  
     args = parser.parse_args()
 
@@ -466,35 +452,37 @@ def main():
             #args.company = args.domain.split('.')[0]
 
     if not args.download:
-        out(punc='')
+        out()
         if args.domain:
-            out(f'domain: \t{args.domain}', '')
+            out(f'domain: \t{args.domain}')
         if args.company:
-            out(f'company:\t{args.company}', '')
+            out(f'company:\t{args.company}')
         if args.id:
-            out(f'target id:\t{args.id}', '')
+            out(f'target id:\t{args.id}')
     else:
         out('Downloading account contacts', pre='\n', post='\n')
     
-    out(f'username:\t{args.username}', '')
-    if not args.hide:
-        out(f'password:\t{args.password}', '')
+    out(f'username:\t{args.username}')
+    out(f'password:\t{"*" * len(args.password)}')
     if args.proxy:
-        out(f'proxy:\t{args.proxy["http"]}', '')
+        out(f'proxy:\t{args.proxy["http"]}')
+    out('')
 
-    if intake('look good enough to continue? [Y/n] ', pre='\n    ').lower() not in {'', 'y', 'yes', 'yolo'}:
-        bombout('exiting')
+    # TODO reimplement this limiter
+    # if intake('look good enough to continue? [Y/n] ', pre='    ').lower() not in {'', 'y', 'yes', 'yolo'}:
+    #     bombout('exiting', pre='\n')
+    # else:
+    #     out('')
 
-    initializeTokenli(args.username, args.password, args.proxy)
+    initializeTokenLI(args.username, args.password, args.proxy)
 
     if args.download:
-        getContactsli(args.outfile, args.proxy)
+        getContactsLI(args.outfile, args.proxy)
     else:
         if not args.id:
-            args.id = searchCompaniesli(args.domain, args.company, args.proxy)
+            args.id = searchCompaniesLI(args.domain, args.company, args.proxy)
 
-        #getCompanyInfoli(args.id, args.company, args.outfile, args.force, args.proxy)
-        getCompanyInfoli(args.id, args.company, args.outfile, None, args.proxy)
+        getCompanyInfoLI(args.id, args.company, args.outfile, args.proxy)
 
 if __name__ == '__main__':
     main()
